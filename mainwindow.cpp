@@ -6,32 +6,33 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMessageBox>
 #include <QNetworkReply>
 #include <QNetworkRequest>
-#include <QMessageBox>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ui(new Ui::MainWindow),
-    networkManager(new QNetworkAccessManager(this)) {
+    networkManager(new QNetworkAccessManager(this)),
+    webSocket(new QWebSocket) {
     ui->setupUi(this);
 
-    qDebug() << QSslSocket::supportsSsl();
-    qDebug() << QSslSocket::sslLibraryBuildVersionString();
-    qDebug() << QSslSocket::sslLibraryVersionString();
+    loadSettings();
+    connect(ui->refreshButton, &QPushButton::clicked, this,
+            &MainWindow::fetchChannels);
+    connect(ui->channelList, &QListWidget::itemClicked, this,
+            &MainWindow::fetchMessages);
 
-    try {
-        loadSettings();
-        connect(ui->refreshButton, &QPushButton::clicked, this,
-                &MainWindow::fetchChannels);
-        connect(ui->channelList, &QListWidget::itemClicked, this,
-                &MainWindow::fetchMessages);
-        fetchChannels();
-    } catch (const std::exception &e) {
-        QString errorMessage = QString("Error: %1").arg(e.what());
-        QMessageBox::information(parent, "Error", errorMessage);
-        qDebug() << "Error:" << e.what();
-        return;
-    }
+    connect(webSocket, &QWebSocket::errorOccurred, this, &MainWindow::onErrorOccurred);
+    connect(webSocket, &QWebSocket::connected, this, &MainWindow::onConnected);
+    connect(webSocket, &QWebSocket::textMessageReceived, this, &MainWindow::onTextMessageReceived);
+    connect(webSocket, &QWebSocket::disconnected, this, &MainWindow::onDisconnected);
+
+    wsUrl = QString("ws://localhost:%1").arg(serverPort);
+
+    qDebug() << "Connecting to webSocket at:" << wsUrl;
+    webSocket->open(QUrl(wsUrl));
+
+    fetchChannels();
 }
 
 MainWindow::~MainWindow() { delete ui; }
@@ -106,8 +107,7 @@ void MainWindow::handleChannelResponse() {
 
 void MainWindow::fetchMessages() {
     QListWidgetItem *item = ui->channelList->currentItem();
-    if (!item)
-        return;
+    if (!item) return;
 
     QString channelId = item->data(Qt::UserRole).toString();
     QString url = QString("http://localhost:%1/api/messages/").arg(serverPort);
@@ -138,4 +138,50 @@ void MainWindow::handleMessageResponse() {
     }
 
     reply->deleteLater();
+}
+
+void MainWindow::onErrorOccurred(QAbstractSocket::SocketError error) {
+    qDebug() << "WebSocket Error:" << webSocket->errorString();
+}
+
+void MainWindow::onConnected() {
+    qDebug() << "WebSocket connected!";
+}
+
+void MainWindow::onTextMessageReceived(const QString &message) {
+    QJsonDocument doc = QJsonDocument::fromJson(message.toUtf8());
+    if (!doc.isObject()) return;
+
+    QJsonObject msgObj = doc.object();
+    qDebug() << "New message received from server:";
+    qDebug() << "User:" << msgObj["user_id"].toString();
+    qDebug() << "Channel:" << msgObj["channel_id"].toString();
+    qDebug() << "Content:" << msgObj["content"].toString();
+
+    QListWidgetItem *item = ui->channelList->currentItem();
+    if (!item) return;
+
+    QString channelId = item->data(Qt::UserRole).toString();
+    if (msgObj["channel_id"].toString() == channelId) {
+        QString username = msgObj["username"].toString();
+        QString content = msgObj["content"].toString();
+        ui->messageList->addItem(username + ": " + content);
+    }
+}
+
+void MainWindow::onDisconnected() {
+    qDebug() << "WebSocket disconnected!";
+}
+
+void MainWindow::sendMessage(const QString &channelId, const QString &message) {
+    if (webSocket->isValid()) {
+        QJsonObject messageJson;
+        messageJson["channel_id"] = channelId;
+        messageJson["content"] = message;
+
+        QJsonDocument doc(messageJson);
+        webSocket->sendTextMessage(doc.toJson(QJsonDocument::Compact));
+    } else {
+        qDebug() << "WebSocket is not connected!";
+    }
 }
