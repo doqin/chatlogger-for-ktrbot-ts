@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file>ktrbot.png</file>
+    </qresource>
+</RCC>
