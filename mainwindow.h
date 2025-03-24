@@ -22,6 +22,8 @@ private slots:
     void saveSettings();
 
     // Fetching methods
+    void fetchServers();
+    void handleServerResponse();
     void fetchChannels();
     void handleChannelResponse();
     void fetchMessages();
